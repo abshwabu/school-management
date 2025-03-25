@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\MarkResource\Pages;
 use App\Models\Mark;
 use App\Models\Subject;
+use App\Models\User;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -44,6 +45,8 @@ class MarkResource extends Resource
                     ->required()
                     ->minValue(0)
                     ->default(100),
+                Forms\Components\Hidden::make('teacher_id')
+                    ->default(fn () => auth()->id()),
             ]);
     }
 
@@ -73,6 +76,39 @@ class MarkResource extends Resource
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\Action::make('add_marks')
+                    ->label('Add Student Marks')
+                    ->icon('heroicon-o-plus')
+                    ->form([
+                        Forms\Components\Select::make('student_id')
+                            ->label('Student')
+                            ->options(function (Mark $record) {
+                                return User::query()
+                                    ->role('student')
+                                    ->whereDoesntHave('studentMarks', function ($query) use ($record) {
+                                        $query->where('mark_id', $record->id);
+                                    })
+                                    ->pluck('name', 'id');
+                            })
+                            ->required()
+                            ->searchable(),
+                        Forms\Components\TextInput::make('score')
+                            ->numeric()
+                            ->required()
+                            ->minValue(0)
+                            ->maxValue(fn (Mark $record) => $record->max_score)
+                            ->suffix(fn (Mark $record) => "/ {$record->max_score}"),
+                    ])
+                    ->action(function (array $data, Mark $record): void {
+                        $record->studentMarks()->create([
+                            'student_id' => $data['student_id'],
+                            'score' => $data['score'],
+                        ]);
+                    })
+                    ->visible(fn (Mark $record): bool => 
+                        auth()->user()->hasRole('admin') || 
+                        (auth()->user()->hasRole('teacher') && $record->subject->teacher_id === auth()->id())
+                    ),
                 Tables\Actions\DeleteAction::make(),
             ])
             ->bulkActions([
@@ -86,7 +122,9 @@ class MarkResource extends Resource
     {
         return parent::getEloquentQuery()
             ->when(auth()->user()->hasRole('teacher'), function ($query) {
-                $query->where('teacher_id', auth()->id());
+                $query->whereHas('subject', function ($q) {
+                    $q->where('teacher_id', auth()->id());
+                });
             });
     }
 
@@ -114,12 +152,12 @@ class MarkResource extends Resource
     public static function canEdit(Model $record): bool
     {
         return auth()->user()->hasRole('admin') || 
-            (auth()->user()->hasRole('teacher') && $record->teacher_id === auth()->id());
+            (auth()->user()->hasRole('teacher') && $record->subject->teacher_id === auth()->id());
     }
 
     public static function canDelete(Model $record): bool
     {
         return auth()->user()->hasRole('admin') || 
-            (auth()->user()->hasRole('teacher') && $record->teacher_id === auth()->id());
+            (auth()->user()->hasRole('teacher') && $record->subject->teacher_id === auth()->id());
     }
 } 
